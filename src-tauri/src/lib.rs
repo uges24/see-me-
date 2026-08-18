@@ -2,9 +2,8 @@ mod runtime;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use runtime::{
-    physical_to_logical, BehaviourEngine, BehaviourInput, BehaviourMode, Bounds,
-    DesktopObjectSettings, DisplayArea, InteractionState, PhotoSettings, RuntimeSettings, MAX_SIZE,
-    MIN_SIZE,
+    physical_to_logical, BehaviourEngine, BehaviourInput, Bounds, DesktopObjectSettings,
+    DisplayArea, InteractionState, PhotoSettings, RuntimeSettings, MAX_SIZE, MIN_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -125,10 +124,36 @@ fn emit_photo_settings(app: &tauri::AppHandle, settings: &PhotoSettings) {
     let _ = app.emit_to("main", "photo-settings", settings.clone());
 }
 
+fn persist_photo_now(app: &tauri::AppHandle, state: &RuntimeState) -> Result<(), String> {
+    let photo = state
+        .photo
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    save_settings(&settings_path(app, PHOTO_SETTINGS_FILE), &photo)
+}
+
+fn ensure_photo_window(app: &tauri::AppHandle, state: &RuntimeState) -> Result<(), String> {
+    if app.get_webview_window(PHOTO_LABEL).is_some() {
+        return Ok(());
+    }
+    let active = state
+        .photo
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .is_some_and(|photo| photo.enabled);
+    if active {
+        create_photo_window(app, state.photo.clone(), state.photo_save_tx.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn apply_window_settings(window: &WebviewWindow, settings: &DesktopObjectSettings) {
     let _ = window.set_always_on_top(settings.always_on_top);
     let _ = window.set_size(PhysicalSize::new(settings.width, settings.height));
-    if settings.visible {
+    if settings.enabled && settings.visible {
         let _ = window.show();
     } else {
         let _ = window.hide();
@@ -457,7 +482,7 @@ fn start_behaviour_engine(
                 previous_display_signature = Some(signature);
                 last_display_check = Instant::now();
             }
-            if !settings.visible {
+            if !settings.enabled || !settings.visible {
                 thread::sleep(Duration::from_millis(250));
                 previous_tick = Instant::now();
                 continue;
@@ -478,7 +503,8 @@ fn start_behaviour_engine(
             let dt = now.saturating_duration_since(previous_tick);
             previous_tick = now;
             let output = engine.step(BehaviourInput {
-                mode: settings.behaviour,
+                visibility: settings.visibility_behaviour,
+                clicks_pass_through: settings.click_through,
                 inside,
                 editing,
                 dt,
@@ -526,8 +552,8 @@ fn start_behaviour_engine(
             }
             let active = editing
                 || matches!(
-                    settings.behaviour,
-                    BehaviourMode::Ghost | BehaviourMode::Fade
+                    settings.visibility_behaviour,
+                    runtime::VisibilityBehaviour::Hide | runtime::VisibilityBehaviour::Fade
                 );
             thread::sleep(if active {
                 Duration::from_millis(33)
@@ -640,20 +666,25 @@ fn import_photo(
             settings.height = (settings.width as f64 / settings.aspect_ratio())
                 .round()
                 .clamp(MIN_SIZE as f64, MAX_SIZE as f64) as u32;
+            // A removed Photo keeps its placement record so it can be re-added,
+            // but a new import must become an active object again.
+            settings.enabled = true;
+            if !current.enabled {
+                settings.visible = true;
+            }
         }
     }
     *state.photo.lock().map_err(|error| error.to_string())? = Some(settings.clone());
+    persist_photo_now(&app, &state)?;
     state
         .photo_save_tx
         .send(())
         .map_err(|error| error.to_string())?;
     if let Some(window) = app.get_webview_window(PHOTO_LABEL) {
         apply_window_settings(&window, &settings.object);
-        let _ = window.show();
         let _ = app.emit_to(PHOTO_LABEL, "photo-data", photo.data_url);
     } else {
-        create_photo_window(&app, state.photo.clone(), state.photo_save_tx.clone())
-            .map_err(|error| error.to_string())?;
+        ensure_photo_window(&app, &state)?;
     }
     emit_photo_settings(&app, &settings);
     Ok(settings)
@@ -683,14 +714,16 @@ fn update_photo_settings(
         settings.relative_y = current.relative_y;
     }
     settings = settings.validated();
-    if let Some(window) = app.get_webview_window(PHOTO_LABEL) {
-        apply_window_settings(&window, &settings.object);
-    }
     *state.photo.lock().map_err(|error| error.to_string())? = Some(settings.clone());
+    persist_photo_now(&app, &state)?;
     state
         .photo_save_tx
         .send(())
         .map_err(|error| error.to_string())?;
+    ensure_photo_window(&app, &state)?;
+    if let Some(window) = app.get_webview_window(PHOTO_LABEL) {
+        apply_window_settings(&window, &settings.object);
+    }
     emit_photo_settings(&app, &settings);
     Ok(settings)
 }
@@ -723,6 +756,21 @@ fn update_settings(
 #[tauri::command]
 fn toggle_edit(app: tauri::AppHandle) {
     toggle_edit_internal(&app);
+}
+
+#[tauri::command]
+fn open_object_inspector(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    if !matches!(label.as_str(), CLOCK_LABEL | PHOTO_LABEL) {
+        return Err("unknown desktop object".into());
+    }
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Studio window unavailable".to_string())?;
+    main.show().map_err(|error| error.to_string())?;
+    let _ = main.unminimize();
+    let _ = main.set_focus();
+    app.emit_to("main", "open-object-inspector", label)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -799,10 +847,10 @@ fn set_launch_at_login(
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Studio", true, None::<&str>)?;
-    let edit = MenuItem::with_id(app, "edit", "Edit Clock", true, Some("Ctrl+Shift+E"))?;
+    let edit = MenuItem::with_id(app, "edit", "Edit Objects", true, Some("Ctrl+Shift+E"))?;
     let show = MenuItem::with_id(app, "show", "Show / Hide Clock", true, None::<&str>)?;
     let top = MenuItem::with_id(app, "top", "Toggle Always on Top", true, None::<&str>)?;
-    let ghost = MenuItem::with_id(app, "ghost", "Ghost on Hover", true, None::<&str>)?;
+    let ghost = MenuItem::with_id(app, "ghost", "Hide on Hover", true, None::<&str>)?;
     let launch = MenuItem::with_id(app, "launch", "Toggle Launch at Login", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Timepiece Studio", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -864,7 +912,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             "ghost" => {
                 let runtime = app.state::<RuntimeState>();
                 if let Ok(mut settings) = runtime.settings.lock() {
-                    settings.behaviour = BehaviourMode::Ghost;
+                    settings.visibility_behaviour = runtime::VisibilityBehaviour::Hide;
                     emit_settings(app, &settings);
                 }
                 let _ = runtime.save_tx.send(());
@@ -931,7 +979,11 @@ pub fn run() {
                 photo_save_tx: photo_save_tx.clone(),
             });
             create_clock_window(app, settings, save_tx)?;
-            if photo.lock().map(|item| item.is_some()).unwrap_or(false) {
+            if photo
+                .lock()
+                .map(|item| item.as_ref().is_some_and(|settings| settings.enabled))
+                .unwrap_or(false)
+            {
                 create_photo_window(app.handle(), photo, photo_save_tx)?;
             }
             build_tray(app)?;
@@ -987,6 +1039,7 @@ pub fn run() {
             import_photo,
             update_photo_settings,
             toggle_edit,
+            open_object_inspector,
             start_clock_drag,
             resize_clock,
             start_clock_resize,
@@ -1001,6 +1054,17 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_photo_test_directory() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before Unix epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("timepiece-photo-test-{unique}"));
+        fs::create_dir_all(&directory).expect("create photo test directory");
+        directory
+    }
 
     #[test]
     fn photo_import_accepts_supported_signatures() {
@@ -1025,5 +1089,74 @@ mod tests {
             BASE64.encode([0xff, 0xd8, 0xff])
         );
         assert!(decode_photo_data(&forged).is_err());
+    }
+
+    #[test]
+    fn persisted_photo_reloads_from_its_app_local_asset() {
+        let directory = temporary_photo_test_directory();
+        let asset = directory.join("objects").join("photo.png");
+        fs::create_dir_all(asset.parent().expect("photo asset parent")).expect("create objects");
+        fs::write(&asset, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+            .expect("write photo asset");
+        let mut photo = PhotoSettings::new(
+            asset.to_string_lossy().into_owned(),
+            "image/png".into(),
+            1600,
+            900,
+        );
+        photo.x = 240;
+        photo.y = 180;
+        photo.width = 540;
+        photo.height = 304;
+        photo.visibility_behaviour = runtime::VisibilityBehaviour::Fade;
+        photo.click_through = true;
+        photo.always_on_top = false;
+        let settings_path = directory.join(PHOTO_SETTINGS_FILE);
+        save_settings(&settings_path, &Some(photo.clone())).expect("persist photo settings");
+
+        assert_eq!(load_photo_settings(&settings_path), Some(photo.validated()));
+        fs::remove_dir_all(directory).expect("remove photo test directory");
+    }
+
+    #[test]
+    fn missing_photo_asset_recovers_without_restoring_a_broken_object() {
+        let directory = temporary_photo_test_directory();
+        let photo = PhotoSettings::new(
+            directory.join("missing.png").to_string_lossy().into_owned(),
+            "image/png".into(),
+            100,
+            100,
+        );
+        let settings_path = directory.join(PHOTO_SETTINGS_FILE);
+        save_settings(&settings_path, &Some(photo)).expect("persist missing photo settings");
+
+        assert_eq!(load_photo_settings(&settings_path), None);
+        fs::remove_dir_all(directory).expect("remove photo test directory");
+    }
+
+    #[test]
+    fn clock_document_updates_do_not_mutate_persisted_photo_document() {
+        let directory = temporary_photo_test_directory();
+        let asset = directory.join("photo.png");
+        fs::write(&asset, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+            .expect("write photo asset");
+        let mut photo = PhotoSettings::new(
+            asset.to_string_lossy().into_owned(),
+            "image/png".into(),
+            640,
+            480,
+        );
+        photo.visible = true;
+        photo.enabled = true;
+        let photo_path = directory.join(PHOTO_SETTINGS_FILE);
+        save_settings(&photo_path, &Some(photo.clone())).expect("persist photo settings");
+
+        let mut clock = RuntimeSettings::default();
+        clock.selected_face = "amber".into();
+        clock.show_second_hand = false;
+        save_settings(&directory.join(SETTINGS_FILE), &clock).expect("persist clock settings");
+
+        assert_eq!(load_photo_settings(&photo_path), Some(photo.validated()));
+        fs::remove_dir_all(directory).expect("remove photo test directory");
     }
 }

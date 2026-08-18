@@ -26,15 +26,24 @@ pub struct DesktopObjectSettings {
     pub relative_y: Option<f64>,
     pub always_on_top: bool,
     pub locked: bool,
-    pub behaviour: BehaviourMode,
+    #[serde(default, alias = "behaviour")]
+    pub visibility_behaviour: VisibilityBehaviour,
+    #[serde(default)]
+    pub click_through: bool,
     pub ghost_hide_delay: u64,
     pub ghost_return_delay: u64,
     pub fade_opacity: f64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub visible: bool,
 }
 
 fn default_clock_id() -> String {
     "clock".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl DesktopObjectSettings {
@@ -52,10 +61,12 @@ impl DesktopObjectSettings {
             relative_y: None,
             always_on_top: true,
             locked: true,
-            behaviour: BehaviourMode::Ghost,
+            visibility_behaviour: VisibilityBehaviour::Hide,
+            click_through: false,
             ghost_hide_delay: 0,
             ghost_return_delay: 150,
             fade_opacity: 0.15,
+            enabled: true,
             visible: true,
         }
     }
@@ -96,6 +107,10 @@ impl DesktopObjectSettings {
             .map(|value| value.clamp(0.0, 1.0));
         self.ghost_hide_delay = self.ghost_hide_delay.min(2_000);
         self.ghost_return_delay = self.ghost_return_delay.min(2_000);
+        if self.visibility_behaviour == VisibilityBehaviour::LegacyClickThrough {
+            self.visibility_behaviour = VisibilityBehaviour::DoNothing;
+            self.click_through = true;
+        }
         self
     }
 }
@@ -136,7 +151,7 @@ impl RuntimeSettings {
         let defaults = Self::default();
         if !matches!(
             self.selected_face.as_str(),
-            "koi" | "orbit" | "flower" | "amber" | "asap" | "love"
+            "koi" | "orbit" | "flower" | "amber"
         ) {
             self.selected_face = defaults.selected_face;
         }
@@ -221,13 +236,17 @@ impl DerefMut for PhotoSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum BehaviourMode {
-    Stay,
-    Ghost,
+pub enum VisibilityBehaviour {
+    #[serde(alias = "stay")]
+    DoNothing,
+    #[default]
+    #[serde(alias = "ghost")]
+    Hide,
     Fade,
-    ClickThrough,
+    #[serde(rename = "click-through")]
+    LegacyClickThrough,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -457,7 +476,8 @@ pub struct BehaviourOutput {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BehaviourInput {
-    pub mode: BehaviourMode,
+    pub visibility: VisibilityBehaviour,
+    pub clicks_pass_through: bool,
     pub inside: bool,
     pub editing: bool,
     pub dt: Duration,
@@ -480,17 +500,21 @@ impl BehaviourEngine {
         if input.editing {
             self.state = InteractionState::Editing;
             self.elapsed = Duration::ZERO;
-            return self.output(input.mode, input.fade_opacity);
+            return BehaviourOutput {
+                state: self.state,
+                opacity: 1.0,
+                click_through: false,
+            };
         }
 
-        if input.mode == BehaviourMode::Stay {
+        if input.visibility == VisibilityBehaviour::DoNothing {
             self.state = InteractionState::Visible;
             self.elapsed = Duration::ZERO;
-            return self.output(input.mode, input.fade_opacity);
-        }
-        if input.mode == BehaviourMode::ClickThrough {
-            self.state = InteractionState::Ghosted;
-            return self.output(input.mode, input.fade_opacity);
+            return self.output(
+                input.visibility,
+                input.fade_opacity,
+                input.clicks_pass_through,
+            );
         }
 
         self.elapsed += input.dt;
@@ -549,14 +573,21 @@ impl BehaviourEngine {
             }
             _ => {}
         }
-        self.output(input.mode, input.fade_opacity)
+        self.output(
+            input.visibility,
+            input.fade_opacity,
+            input.clicks_pass_through,
+        )
     }
 
-    fn output(self, mode: BehaviourMode, fade_opacity: f64) -> BehaviourOutput {
-        let hidden_opacity = if mode == BehaviourMode::Fade {
+    fn output(
+        self,
+        visibility: VisibilityBehaviour,
+        fade_opacity: f64,
+        clicks_pass_through: bool,
+    ) -> BehaviourOutput {
+        let hidden_opacity = if visibility == VisibilityBehaviour::Fade {
             fade_opacity
-        } else if mode == BehaviourMode::ClickThrough {
-            1.0
         } else {
             0.0
         };
@@ -568,7 +599,7 @@ impl BehaviourEngine {
         BehaviourOutput {
             state: self.state,
             opacity,
-            click_through: self.state == InteractionState::Ghosted,
+            click_through: clicks_pass_through || self.state == InteractionState::Ghosted,
         }
     }
 }
@@ -592,7 +623,8 @@ mod tests {
 
     fn tick(engine: &mut BehaviourEngine, inside: bool, ms: u64) -> BehaviourOutput {
         engine.step(BehaviourInput {
-            mode: BehaviourMode::Ghost,
+            visibility: VisibilityBehaviour::Hide,
+            clicks_pass_through: false,
             inside,
             editing: false,
             dt: Duration::from_millis(ms),
@@ -747,7 +779,8 @@ mod tests {
         tick(&mut engine, true, 1);
         tick(&mut engine, true, 140);
         let output = engine.step(BehaviourInput {
-            mode: BehaviourMode::Ghost,
+            visibility: VisibilityBehaviour::Hide,
+            clicks_pass_through: false,
             inside: true,
             editing: true,
             dt: Duration::ZERO,
@@ -758,6 +791,24 @@ mod tests {
         assert_eq!(output.state, InteractionState::Editing);
         assert!(!output.click_through);
         assert_eq!(output.opacity, 1.0);
+    }
+
+    #[test]
+    fn pointer_passthrough_is_independent_from_visibility() {
+        let mut engine = BehaviourEngine::default();
+        let output = engine.step(BehaviourInput {
+            visibility: VisibilityBehaviour::DoNothing,
+            clicks_pass_through: true,
+            inside: false,
+            editing: false,
+            dt: Duration::ZERO,
+            hide_delay: Duration::ZERO,
+            return_delay: Duration::ZERO,
+            fade_opacity: 0.15,
+        });
+        assert_eq!(output.state, InteractionState::Visible);
+        assert_eq!(output.opacity, 1.0);
+        assert!(output.click_through);
     }
 
     #[test]

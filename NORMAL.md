@@ -18,12 +18,13 @@ An object should be available at a glance, then disappear, fade, or pass input t
 
 Timepiece Studio 0.1.0 is a Windows-first Tauri 2 application with:
 
-- The existing dark editorial Studio for viewing the current face, browsing faces, and changing runtime settings.
-- Six Studio choices: Koi Nocturne, Aurora Orrery, Verdant Halo, Tangerine Tide, Daydream Coast, and the local-photo Love Frame.
+- A focused dark editorial Studio with Home, Objects, Clock Faces, and app-wide Settings.
+- Home answers what is active and provides a prominent `+ Add object`; Objects provides Edit, Show/Hide, and Remove for Clock and Photo.
+- Four production clock faces with true alpha: Koi Nocturne, Aurora Orrery, Verdant Halo, and Tangerine Tide. Photo is a separate object, not a fake clock face.
 - Separate floating native Clock and local Photo object windows, with no title bars, borders, taskbar entries, or rectangular backgrounds.
 - Independent hour, minute, and optional second hands showing local system time.
 - Live and Edit modes, native move, bounded square resize, lock, show/hide, and always-on-top.
-- Stay, Ghost, Fade, and Click Through behavior modes with hide/return delays and fade opacity.
+- Independent visibility behavior (`Hide`, `Fade`, or `Do nothing`) and pointer behavior (`Let clicks pass through` on/off), with hide/return delays and fade opacity.
 - A Rust behavior state machine and native desktop cursor geometry that continue working after the window becomes click-through.
 - Shared `DesktopObjectSettings` for physical virtual-desktop geometry, monitor/DPI metadata, normalized monitor-relative placement, behavior, visibility, lock, and always-on-top.
 - Local JSON persistence for Clock and Photo; imported PNG/JPEG/WebP media is copied into application storage without modifying the source.
@@ -43,12 +44,12 @@ Something with its own position, size, appearance, persistence, and lifecycle on
 
 ### Behaviour
 
-How an object responds to the user. Current behaviors are:
+How an object responds to the user. Visibility and pointer behavior are deliberately separate:
 
-- **Stay:** visible and normally interactive.
-- **Ghost:** fades completely and becomes click-through while the pointer occupies its desktop bounds.
-- **Fade:** fades to a configured opacity and becomes click-through.
-- **Click Through:** remains visible while input always passes to the application below.
+- **Hide:** disappears while the pointer occupies its desktop bounds.
+- **Fade:** fades to a configured opacity while the pointer occupies its desktop bounds.
+- **Do nothing:** stays visually unchanged on hover.
+- **Let clicks pass through:** independently keeps input flowing to the application below, regardless of the selected visibility behavior.
 
 Potential future behaviors include Dodge, Peek, Edge, and contextual visibility.
 
@@ -152,11 +153,11 @@ Clock and Photo now share `DesktopObjectSettings`, monitor recovery, native move
 
 ### NOW
 
-Complete real native acceptance QA for Photo on the current Windows desktop.
+Stabilize and polish the two-object V0: Clock + Photo.
 
 ### NEXT
 
-After Photo: Sticky Note, then Timer/Countdown.
+Complete the remaining physical gesture QA listed in `IMPLEMENTATION_STATUS.md`; do not begin Sticky Note or Timer until that explicit acceptance task is closed.
 
 ### LATER
 
@@ -170,9 +171,9 @@ An object SDK, ecosystem, or marketplace only if the core interaction quality an
 
 - Windows-first; other desktop platforms are not currently packaged or natively QA tested.
 - The current runtime supports one Clock and one Photo; arbitrary multiple instances are not implemented.
-- Photo implementation passes automated and packaging checks, but its full native import/move/resize/Ghost/restart acceptance path still requires a real file selection pass.
+- A persisted native Photo is stored in app-local storage and restored after restart. The remaining Photo acceptance is direct native move/resize and a click delivered to an underlying normal application while persistent click-through is on.
 - Cross-monitor movement, mixed-DPI displays, and monitor unplug/reconnect are unit tested but have not been physically tested because only one monitor was available.
-- Koi has genuine alpha; several secondary generated face files contain baked backgrounds.
+- All four faces exposed in the Clock Faces gallery have genuine alpha. Daydream Coast remains quarantined from the product because its source contains a baked checkerboard.
 - Chrome passed native Ghost click-through QA; File Explorer and VS Code were not separately exercised.
 - Autostart is implemented but was not enabled during QA to avoid changing the user's startup configuration.
 - The browser preview cannot reproduce native overlay behavior.
