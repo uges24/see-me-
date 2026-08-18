@@ -25,8 +25,8 @@ Timepiece Studio 0.1.0 is a Windows-first Tauri 2 application with:
 - Live and Edit modes, native move, bounded square resize, lock, show/hide, and always-on-top.
 - Stay, Ghost, Fade, and Click Through behavior modes with hide/return delays and fade opacity.
 - A Rust behavior state machine and native desktop cursor geometry that continue working after the window becomes click-through.
-- Local JSON persistence for face, physical position/size, monitor/DPI metadata, behavior, movement, visibility, lock, and launch preference.
-- Off-screen recovery, system tray controls, and a global `Ctrl+Shift+E` Edit Mode shortcut.
+- Local JSON persistence for face, physical virtual-desktop position/size, monitor/DPI metadata, normalized monitor-relative placement, behavior, movement, visibility, lock, and launch preference.
+- Work-area-aware off-screen and display-topology recovery, system tray controls, and a global `Ctrl+Shift+E` Edit Mode shortcut.
 - Optional Windows launch at login.
 - A browser preview that preserves the Studio while explaining that native overlays require the desktop app.
 - Bundled local assets and no accounts, analytics, telemetry, or cloud storage.
@@ -151,11 +151,11 @@ Only the Clock object and its general behavior foundation exist today. Future wo
 
 ### NOW
 
-Phase 1 runtime hardening: multi-monitor/DPI persistence, movement/resize feel, asset transparency, recovery, and regression coverage.
+Phase 2: add the first non-clock Photo object on the shared native object runtime.
 
 ### NEXT
 
-After runtime hardening: Photo, Sticky Note, and Timer/Countdown objects, in that order unless evidence changes the priority.
+After Photo: Sticky Note, then Timer/Countdown.
 
 ### LATER
 
@@ -169,8 +169,7 @@ An object SDK, ecosystem, or marketplace only if the core interaction quality an
 
 - Windows-first; other desktop platforms are not currently packaged or natively QA tested.
 - V0 supports one active clock, not multiple objects.
-- A second physical monitor and monitor unplug/reconnect have not been hardware tested.
-- The saved monitor/scale factor is restored, but the current native move handler does not update monitor identity after crossing displays; this is the strongest next hardening task.
+- Cross-monitor movement, mixed-DPI displays, and monitor unplug/reconnect are unit tested but have not been physically tested because only one monitor was available.
 - Koi has genuine alpha; several secondary generated face files contain baked backgrounds.
 - Chrome passed native Ghost click-through QA; File Explorer and VS Code were not separately exercised.
 - Autostart is implemented but was not enabled during QA to avoid changing the user's startup configuration.

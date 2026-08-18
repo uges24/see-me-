@@ -1,8 +1,8 @@
 mod runtime;
 
 use runtime::{
-    BehaviourEngine, BehaviourInput, BehaviourMode, Bounds, InteractionState, RuntimeSettings,
-    MAX_SIZE, MIN_SIZE,
+    physical_to_logical, BehaviourEngine, BehaviourInput, BehaviourMode, Bounds, DisplayArea,
+    InteractionState, RuntimeSettings, MAX_SIZE, MIN_SIZE,
 };
 use serde::Serialize;
 use std::{
@@ -105,6 +105,7 @@ fn emit_settings(app: &tauri::AppHandle, settings: &RuntimeSettings) {
 
 fn apply_window_settings(window: &WebviewWindow, settings: &RuntimeSettings) {
     let _ = window.set_always_on_top(settings.always_on_top);
+    let _ = window.set_size(PhysicalSize::new(settings.width, settings.height));
     if settings.visible {
         let _ = window.show();
     } else {
@@ -112,35 +113,69 @@ fn apply_window_settings(window: &WebviewWindow, settings: &RuntimeSettings) {
     }
 }
 
+fn display_areas(window: &WebviewWindow) -> Vec<DisplayArea> {
+    window
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| {
+            let work_area = monitor.work_area();
+            DisplayArea {
+                name: monitor.name().cloned(),
+                work_area: Bounds {
+                    x: work_area.position.x,
+                    y: work_area.position.y,
+                    width: work_area.size.width,
+                    height: work_area.size.height,
+                },
+                scale_factor: monitor.scale_factor(),
+            }
+        })
+        .collect()
+}
+
+fn primary_monitor_name(window: &WebviewWindow) -> Option<String> {
+    window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| monitor.name().cloned())
+}
+
 fn recover_window_to_visible_monitor(window: &WebviewWindow, settings: &mut RuntimeSettings) {
-    let monitors = window.available_monitors().unwrap_or_default();
-    if monitors.is_empty() {
-        return;
-    }
-    let intersects = monitors.iter().any(|monitor| {
-        let position = monitor.position();
-        let size = monitor.size();
-        settings.x < position.x + size.width as i32
-            && settings.x + settings.width as i32 > position.x
-            && settings.y < position.y + size.height as i32
-            && settings.y + settings.height as i32 > position.y
-    });
-    let target = monitors
+    let displays = display_areas(window);
+    let primary = primary_monitor_name(window);
+    settings.restore_display_placement(&displays, primary.as_deref());
+}
+
+fn display_signature(displays: &[DisplayArea]) -> Vec<(Option<String>, i32, i32, u32, u32, u64)> {
+    let mut signature = displays
         .iter()
-        .find(|monitor| monitor.name() == settings.monitor.as_ref())
-        .unwrap_or(&monitors[0]);
-    if !intersects {
-        settings.x = target.position().x + 40;
-        settings.y = target.position().y + 40;
+        .map(|display| {
+            (
+                display.name.clone(),
+                display.work_area.x,
+                display.work_area.y,
+                display.work_area.width,
+                display.work_area.height,
+                display.scale_factor.to_bits(),
+            )
+        })
+        .collect::<Vec<_>>();
+    signature.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    signature
+}
+
+fn reconcile_display_layout(window: &WebviewWindow, runtime: &RuntimeState) {
+    let displays = display_areas(window);
+    let primary = primary_monitor_name(window);
+    if let Ok(mut current) = runtime.settings.lock() {
+        if current.restore_display_placement(&displays, primary.as_deref()) {
+            let _ = window.set_position(PhysicalPosition::new(current.x, current.y));
+            let _ = window.set_size(PhysicalSize::new(current.width, current.height));
+            let _ = runtime.save_tx.send(());
+        }
     }
-    let position = target.position();
-    let size = target.size();
-    let max_x = position.x + size.width as i32 - settings.width as i32;
-    let max_y = position.y + size.height as i32 - settings.height as i32;
-    settings.x = settings.x.clamp(position.x, max_x.max(position.x));
-    settings.y = settings.y.clamp(position.y, max_y.max(position.y));
-    settings.monitor = target.name().cloned();
-    settings.scale_factor = target.scale_factor();
 }
 
 fn create_clock_window(
@@ -155,7 +190,10 @@ fn create_clock_window(
         WebviewUrl::App("index.html?window=clock".into()),
     )
     .title("Timepiece Clock")
-    .inner_size(current.width as f64, current.height as f64)
+    .inner_size(
+        physical_to_logical(current.width, current.scale_factor),
+        physical_to_logical(current.height, current.scale_factor),
+    )
     .min_inner_size(MIN_SIZE as f64, MIN_SIZE as f64)
     .max_inner_size(MAX_SIZE as f64, MAX_SIZE as f64)
     .transparent(true)
@@ -173,15 +211,18 @@ fn create_clock_window(
         recover_window_to_visible_monitor(&window, &mut current);
         let _ = window.set_position(PhysicalPosition::new(current.x, current.y));
         let _ = window.set_size(PhysicalSize::new(current.width, current.height));
+        let _ = save_tx.send(());
     }
     let event_settings = settings.clone();
     let event_tx = save_tx.clone();
     let resize_window = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(position) => {
+            let displays = display_areas(&resize_window);
             if let Ok(mut current) = event_settings.lock() {
                 current.x = position.x;
                 current.y = position.y;
+                current.capture_display_placement(&displays);
             }
             let _ = event_tx.send(());
         }
@@ -194,6 +235,15 @@ fn create_clock_window(
             if let Ok(mut current) = event_settings.lock() {
                 current.width = size.width.clamp(MIN_SIZE, MAX_SIZE);
                 current.height = current.width;
+                current.capture_display_placement(&display_areas(&resize_window));
+            }
+            let _ = event_tx.send(());
+        }
+        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            if let Ok(mut current) = event_settings.lock() {
+                current.scale_factor = *scale_factor;
+                current.capture_display_placement(&display_areas(&resize_window));
+                let _ = resize_window.set_size(PhysicalSize::new(current.width, current.height));
             }
             let _ = event_tx.send(());
         }
@@ -225,6 +275,8 @@ fn start_behaviour_engine(app: tauri::AppHandle) {
         let mut previous: Option<Appearance> = None;
         let mut previous_tick = Instant::now();
         let mut last_emit = Instant::now() - Duration::from_secs(2);
+        let mut last_display_check = Instant::now() - Duration::from_secs(2);
+        let mut previous_display_signature = None;
         loop {
             let runtime = app.state::<RuntimeState>();
             if runtime.quitting.load(Ordering::Relaxed) {
@@ -240,6 +292,23 @@ fn start_behaviour_engine(app: tauri::AppHandle) {
                 thread::sleep(Duration::from_millis(250));
                 continue;
             };
+            if last_display_check.elapsed() >= Duration::from_secs(1) {
+                let displays = display_areas(&clock);
+                let signature = display_signature(&displays);
+                let layout_changed = previous_display_signature
+                    .as_ref()
+                    .is_some_and(|previous| previous != &signature);
+                let offscreen = runtime
+                    .settings
+                    .lock()
+                    .map(|current| !current.intersects_display(&displays))
+                    .unwrap_or(false);
+                if layout_changed || offscreen {
+                    reconcile_display_layout(&clock, &runtime);
+                }
+                previous_display_signature = Some(signature);
+                last_display_check = Instant::now();
+            }
             if !settings.visible {
                 thread::sleep(Duration::from_millis(250));
                 previous_tick = Instant::now();
@@ -336,7 +405,16 @@ fn update_settings(
     state: tauri::State<RuntimeState>,
     settings: RuntimeSettings,
 ) -> Result<RuntimeSettings, String> {
-    let settings = settings.validated();
+    let mut settings = settings.validated();
+    {
+        let current = state.settings.lock().map_err(|error| error.to_string())?;
+        settings.x = current.x;
+        settings.y = current.y;
+        settings.monitor.clone_from(&current.monitor);
+        settings.scale_factor = current.scale_factor;
+        settings.relative_x = current.relative_x;
+        settings.relative_y = current.relative_y;
+    }
     if let Some(clock) = app.get_webview_window(CLOCK_LABEL) {
         apply_window_settings(&clock, &settings);
     }

@@ -77,7 +77,7 @@ Preserve all of the following unless a task explicitly changes them:
 - Local debounced persistence, invalid-state validation, and off-screen recovery.
 - Tray recovery/actions, `Ctrl+Shift+E`, show/hide, launch at login, and one active clock.
 - Selected-face updates from the Studio to the native object.
-- Physical-pixel desktop coordinates and DPI metadata.
+- Physical virtual-desktop coordinates, monitor-relative restore metadata, work-area recovery, and explicit DPI conversion at UI boundaries.
 - Browser preview without unconditional Tauri calls.
 
 ## The core Ghost rule
@@ -85,6 +85,10 @@ Preserve all of the following unless a task explicitly changes them:
 Never implement Ghost Mode using only `mouseenter`, `mouseleave`, `pointerenter`, `pointerleave`, or CSS `:hover`. Once the clock becomes click-through, browser pointer events can stop. `WebviewWindow::cursor_position()` plus native window bounds and the explicit Rust state machine are part of the product architecture.
 
 Ghost is not complete because a toggle exists. It is complete only when the native window fades out, becomes click-through, stays out while the cursor remains in its original bounds, lets the underlying application receive input, and returns after exit without flicker.
+
+## Geometry authority
+
+The native runtime owns object geometry. Persist `x`, `y`, width, and height as physical virtual-desktop pixels; negative coordinates are valid. Also persist normalized placement relative to the containing monitor work area so resolution and scaling changes can restore intelligently. Studio settings must not overwrite native position, monitor, DPI, or relative-placement metadata with stale browser state.
 
 ## Autonomous work loop
 
