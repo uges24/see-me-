@@ -20,12 +20,13 @@ Timepiece Studio 0.1.0 is a Windows-first Tauri 2 application with:
 
 - The existing dark editorial Studio for viewing the current face, browsing faces, and changing runtime settings.
 - Six Studio choices: Koi Nocturne, Aurora Orrery, Verdant Halo, Tangerine Tide, Daydream Coast, and the local-photo Love Frame.
-- One real floating native clock window, separate from the Studio, with no title bar, border, taskbar entry, or rectangular background.
+- Separate floating native Clock and local Photo object windows, with no title bars, borders, taskbar entries, or rectangular backgrounds.
 - Independent hour, minute, and optional second hands showing local system time.
 - Live and Edit modes, native move, bounded square resize, lock, show/hide, and always-on-top.
 - Stay, Ghost, Fade, and Click Through behavior modes with hide/return delays and fade opacity.
 - A Rust behavior state machine and native desktop cursor geometry that continue working after the window becomes click-through.
-- Local JSON persistence for face, physical virtual-desktop position/size, monitor/DPI metadata, normalized monitor-relative placement, behavior, movement, visibility, lock, and launch preference.
+- Shared `DesktopObjectSettings` for physical virtual-desktop geometry, monitor/DPI metadata, normalized monitor-relative placement, behavior, visibility, lock, and always-on-top.
+- Local JSON persistence for Clock and Photo; imported PNG/JPEG/WebP media is copied into application storage without modifying the source.
 - Work-area-aware off-screen and display-topology recovery, system tray controls, and a global `Ctrl+Shift+E` Edit Mode shortcut.
 - Optional Windows launch at login.
 - A browser preview that preserves the Studio while explaining that native overlays require the desktop app.
@@ -38,7 +39,7 @@ Koi Nocturne has a genuine-alpha production asset. Several secondary generated s
 
 ### Object
 
-Something with its own position, size, appearance, persistence, and lifecycle on the desktop. V0 supports one Clock object.
+Something with its own position, size, appearance, persistence, and lifecycle on the desktop. The current runtime supports one Clock and one Photo object.
 
 ### Behaviour
 
@@ -135,7 +136,7 @@ Desktop Runtime
 └── Studio
 ```
 
-Only the Clock object and its general behavior foundation exist today. Future work should extend `DesktopObject + Behaviour`, not duplicate behavior logic for each object type.
+Clock and Photo now share `DesktopObjectSettings`, monitor recovery, native movement/resizing, Edit/Live state, and one behavior engine. Rendering and content persistence remain type-specific.
 
 ## 12. Design principles
 
@@ -151,7 +152,7 @@ Only the Clock object and its general behavior foundation exist today. Future wo
 
 ### NOW
 
-Phase 2: add the first non-clock Photo object on the shared native object runtime.
+Complete real native acceptance QA for Photo on the current Windows desktop.
 
 ### NEXT
 
@@ -168,7 +169,8 @@ An object SDK, ecosystem, or marketplace only if the core interaction quality an
 ## 14. Known limitations
 
 - Windows-first; other desktop platforms are not currently packaged or natively QA tested.
-- V0 supports one active clock, not multiple objects.
+- The current runtime supports one Clock and one Photo; arbitrary multiple instances are not implemented.
+- Photo implementation passes automated and packaging checks, but its full native import/move/resize/Ghost/restart acceptance path still requires a real file selection pass.
 - Cross-monitor movement, mixed-DPI displays, and monitor unplug/reconnect are unit tested but have not been physically tested because only one monitor was available.
 - Koi has genuine alpha; several secondary generated face files contain baked backgrounds.
 - Chrome passed native Ghost click-through QA; File Explorer and VS Code were not separately exercised.

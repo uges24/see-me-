@@ -4,7 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { clockAngles } from "./clock.js";
 
 const nativeRuntime = isTauri();
-const clockWindow = new URLSearchParams(location.search).get("window") === "clock";
+const objectWindow = new URLSearchParams(location.search).get("window");
+const clockWindow = objectWindow === "clock";
+const photoWindow = objectWindow === "photo";
 
 const faces = [
   { id: "koi", name: "Koi Nocturne", type: "Koi", tone: "indigo", free: true, note: "Original ornamental dial" },
@@ -28,6 +30,7 @@ const defaults = {
   photoScale: 1,
   photoX: 50,
   photoY: 50,
+  photoObject: null,
   x: 80,
   y: 80,
   monitor: null,
@@ -82,7 +85,7 @@ const runtimeSettings = () => ({
 const persist = () => {
   const { screen, selected, widgetOpen, ...stored } = state;
   localStorage.setItem("timepiece-studio", JSON.stringify(stored));
-  if (nativeRuntime && !clockWindow) invoke("update_settings", { settings: runtimeSettings() }).catch(console.error);
+  if (nativeRuntime && !objectWindow) invoke("update_settings", { settings: runtimeSettings() }).catch(console.error);
 };
 
 function faceMarkup(face, compact = false) {
@@ -134,7 +137,8 @@ function settingsMarkup() {
   const control = (id, label, value) => `<button class="setting-row" id="${id}"><span>${label}</span><b>${value}</b></button>`;
   const delayOptions = [0, 100, 250, 500].map((value) => `<option value="${value}">${value} ms</option>`).join("");
   const photoControls = state.face === "love" ? `<div class="setting-group"><p class="eyebrow">PHOTO FRAME</p><label class="range-row"><span>Photo scale <b>${Math.round(state.photoScale * 100)}%</b></span><input id="photoScale" type="range" min="70" max="170" value="${Math.round(state.photoScale * 100)}" /></label><label class="range-row"><span>Horizontal crop <b>${state.photoX}%</b></span><input id="photoX" type="range" min="0" max="100" value="${state.photoX}" /></label><label class="range-row"><span>Vertical crop <b>${state.photoY}%</b></span><input id="photoY" type="range" min="0" max="100" value="${state.photoY}" /></label></div>` : "";
-  return `<section class="settings-view"><div class="settings-column"><div class="setting-group"><p class="eyebrow">INTERACTION</p><label class="select-row"><span>Behaviour</span><select id="behaviourSelect"><option value="ghost">Ghost on hover</option><option value="fade">Fade on hover</option><option value="click-through">Click through</option><option value="stay">Stay visible</option></select></label><label class="select-row"><span>Hide delay</span><select id="hideDelay">${delayOptions}</select></label><label class="select-row"><span>Return delay</span><select id="returnDelay">${delayOptions}</select></label><label class="range-row"><span>Fade opacity <b>${Math.round(state.fadeOpacity * 100)}%</b></span><input id="fadeOpacity" type="range" min="5" max="50" value="${Math.round(state.fadeOpacity * 100)}" /></label>${nativeRuntime ? control("editToggle", "Edit clock", "CTRL + SHIFT + E") : "<p class='native-note'>Desktop overlay controls are available in the Timepiece Studio Windows app.</p>"}</div><div class="setting-group"><p class="eyebrow">MOTION</p>${control("secondsToggle", "Show second hand", state.showSeconds ? "ON" : "OFF")}${control("smoothToggle", "Smooth movement", state.smooth ? "ON" : "OFF")}${control("animationToggle", "Animate watch face", state.animate ? "ON" : "OFF")}</div><div class="setting-group"><p class="eyebrow">RENDERING</p><label class="select-row"><span>Dial finish</span><select id="renderMode"><option value="smooth">Smooth mineral</option><option value="crisp">Crisp edges</option><option value="retro">Retro grain</option></select></label></div></div><div class="settings-column"><div class="setting-group"><p class="eyebrow">WINDOW</p>${control("visibilityToggle", state.visible ? "Hide clock" : "Show clock", state.visible ? "VISIBLE" : "HIDDEN")}${control("topToggle", "Always above windows", state.alwaysOnTop ? "ON" : "OFF")}${control("lockToggle", "Lock position", state.locked ? "ON" : "OFF")}${control("launchToggle", "Launch at login", state.launchAtLogin ? "ON" : "OFF")}<label class="range-row"><span>Studio preview opacity <b>${Math.round(state.opacity * 100)}%</b></span><input id="opacityRange" type="range" min="45" max="100" value="${Math.round(state.opacity * 100)}" /></label><label class="range-row"><span>Clock size <b>${state.size}px</b></span><input id="sizeRange" type="range" min="180" max="720" value="${state.size}" /></label></div>${photoControls}<div class="setting-group setting-group--privacy"><p class="eyebrow">YOUR DATA</p><h3>Nothing leaves this device.</h3><p>Faces, position, behavior, and your optional photo stay in local application storage. There are no accounts, analytics, or cloud uploads.</p></div></div></section>`;
+  const objectPhoto = state.photoObject ? `<div class="setting-group"><p class="eyebrow">PHOTO OBJECT</p><h3 class="object-title">Your floating photo</h3><label class="select-row"><span>Behaviour</span><select id="photoBehaviourSelect"><option value="ghost">Ghost on hover</option><option value="fade">Fade on hover</option><option value="click-through">Click through</option><option value="stay">Stay visible</option></select></label>${control("photoVisibilityToggle", state.photoObject.visible ? "Hide photo" : "Show photo", state.photoObject.visible ? "VISIBLE" : "HIDDEN")}${control("photoTopToggle", "Always above windows", state.photoObject.alwaysOnTop ? "ON" : "OFF")}${control("replacePhoto", "Replace local photo", "CHOOSE FILE")}</div>` : `<div class="setting-group"><p class="eyebrow">PHOTO OBJECT</p><h3 class="object-title">Float a memory.</h3><p class="native-note">PNG, JPEG, and WebP stay on this device and keep their natural proportions.</p><button class="button button--light" id="replacePhoto">Add photo object</button></div>`;
+  return `<section class="settings-view"><div class="settings-column"><div class="setting-group"><p class="eyebrow">INTERACTION</p><label class="select-row"><span>Behaviour</span><select id="behaviourSelect"><option value="ghost">Ghost on hover</option><option value="fade">Fade on hover</option><option value="click-through">Click through</option><option value="stay">Stay visible</option></select></label><label class="select-row"><span>Hide delay</span><select id="hideDelay">${delayOptions}</select></label><label class="select-row"><span>Return delay</span><select id="returnDelay">${delayOptions}</select></label><label class="range-row"><span>Fade opacity <b>${Math.round(state.fadeOpacity * 100)}%</b></span><input id="fadeOpacity" type="range" min="5" max="50" value="${Math.round(state.fadeOpacity * 100)}" /></label>${nativeRuntime ? control("editToggle", "Edit objects", "CTRL + SHIFT + E") : "<p class='native-note'>Desktop overlay controls are available in the Timepiece Studio Windows app.</p>"}</div><div class="setting-group"><p class="eyebrow">MOTION</p>${control("secondsToggle", "Show second hand", state.showSeconds ? "ON" : "OFF")}${control("smoothToggle", "Smooth movement", state.smooth ? "ON" : "OFF")}${control("animationToggle", "Animate watch face", state.animate ? "ON" : "OFF")}</div><div class="setting-group"><p class="eyebrow">RENDERING</p><label class="select-row"><span>Dial finish</span><select id="renderMode"><option value="smooth">Smooth mineral</option><option value="crisp">Crisp edges</option><option value="retro">Retro grain</option></select></label></div></div><div class="settings-column"><div class="setting-group"><p class="eyebrow">CLOCK WINDOW</p>${control("visibilityToggle", state.visible ? "Hide clock" : "Show clock", state.visible ? "VISIBLE" : "HIDDEN")}${control("topToggle", "Always above windows", state.alwaysOnTop ? "ON" : "OFF")}${control("lockToggle", "Lock position", state.locked ? "ON" : "OFF")}${control("launchToggle", "Launch at login", state.launchAtLogin ? "ON" : "OFF")}<label class="range-row"><span>Studio preview opacity <b>${Math.round(state.opacity * 100)}%</b></span><input id="opacityRange" type="range" min="45" max="100" value="${Math.round(state.opacity * 100)}" /></label><label class="range-row"><span>Clock size <b>${state.size}px</b></span><input id="sizeRange" type="range" min="180" max="720" value="${state.size}" /></label></div>${nativeRuntime ? objectPhoto : ""}${photoControls}<div class="setting-group setting-group--privacy"><p class="eyebrow">YOUR DATA</p><h3>Nothing leaves this device.</h3><p>Faces, position, behavior, and your optional photo stay in local application storage. There are no accounts, analytics, or cloud uploads.</p></div></div></section>`;
 }
 
 function widgetMarkup(face) {
@@ -151,6 +155,8 @@ function render() {
   if (hideDelay) hideDelay.value = String(state.ghostHideDelay);
   const returnDelay = document.querySelector("#returnDelay");
   if (returnDelay) returnDelay.value = String(state.ghostReturnDelay);
+  const photoBehaviour = document.querySelector("#photoBehaviourSelect");
+  if (photoBehaviour && state.photoObject) photoBehaviour.value = state.photoObject.behaviour;
   bindEvents();
   syncClock();
 }
@@ -188,19 +194,43 @@ function bindEvents() {
   document.querySelector("#sizeRange")?.addEventListener("input", (event) => { state.size = Number(event.target.value); persist(); render(); });
   ["photoScale", "photoX", "photoY"].forEach((id) => document.querySelector(`#${id}`)?.addEventListener("input", (event) => { state[id] = id === "photoScale" ? event.target.value / 100 : Number(event.target.value); persist(); render(); }));
   document.querySelector("#openPhoto")?.addEventListener("click", openPhotoPicker);
+  document.querySelector("#replacePhoto")?.addEventListener("click", openPhotoPicker);
+  document.querySelector("#photoVisibilityToggle")?.addEventListener("click", () => updatePhotoObject({ visible: !state.photoObject.visible }));
+  document.querySelector("#photoTopToggle")?.addEventListener("click", () => updatePhotoObject({ alwaysOnTop: !state.photoObject.alwaysOnTop }));
+  document.querySelector("#photoBehaviourSelect")?.addEventListener("change", (event) => updatePhotoObject({ behaviour: event.target.value }));
+}
+
+async function updatePhotoObject(changes) {
+  if (!state.photoObject) return;
+  try {
+    state.photoObject = await invoke("update_photo_settings", { settings: { ...state.photoObject, ...changes } });
+    persist();
+    render();
+  } catch (error) { console.error("Could not update photo object", error); }
 }
 
 function openPhotoPicker() {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = "image/*";
+  input.accept = "image/png,image/jpeg,image/webp";
+  input.hidden = true;
+  document.body.append(input);
   input.addEventListener("change", () => {
     const file = input.files?.[0];
-    if (!file) return;
+    if (!file) { input.remove(); return; }
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const image = new Image();
-      image.addEventListener("load", () => {
+      image.addEventListener("load", async () => {
+        if (nativeRuntime) {
+          try {
+            state.photoObject = await invoke("import_photo", { photo: { dataUrl: reader.result, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight } });
+            state.screen = "settings";
+            persist();
+            render();
+          } catch (error) { console.error("Could not import photo", error); }
+          return;
+        }
         const scale = Math.min(1, 1000 / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(image.width * scale);
@@ -214,6 +244,7 @@ function openPhotoPicker() {
       image.src = reader.result;
     });
     reader.readAsDataURL(file);
+    input.remove();
   });
   input.click();
 }
@@ -298,6 +329,36 @@ function bindClockControls(settings) {
   });
 }
 
+function photoRuntimeMarkup(data) {
+  return `<main class="clock-object photo-object" id="photoObject" aria-label="Floating photo">
+    <img class="photo-object-image" src="${data}" alt="Your floating local photo" draggable="false" />
+    <div class="edit-controls" aria-label="Photo edit controls">
+      <button class="object-control object-move" id="objectMove" aria-label="Move photo" title="Move photo">${icon("move", 15)}</button>
+      <button class="object-control object-settings" id="objectSettings" aria-label="Finish editing" title="Finish editing">${icon("settings", 15)}</button>
+      <button class="object-control object-close" id="objectClose" aria-label="Hide photo" title="Hide photo">${icon("close", 15)}</button>
+      <button class="object-control object-resize" id="objectResize" aria-label="Resize photo" title="Resize photo">${icon("expand", 15)}</button>
+    </div>
+    <output class="debug-readout" id="debugReadout" aria-live="off"></output>
+  </main>`;
+}
+
+function bindPhotoControls(settings) {
+  document.querySelector("#objectMove")?.addEventListener("pointerdown", (event) => { event.preventDefault(); invoke("start_object_drag", { label: "photo" }).catch(console.error); });
+  document.querySelector("#objectSettings")?.addEventListener("click", () => invoke("toggle_edit").catch(console.error));
+  document.querySelector("#objectClose")?.addEventListener("click", () => invoke("update_photo_settings", { settings: { ...settings, visible: false } }).catch(console.error));
+  document.querySelector("#objectResize")?.addEventListener("pointerdown", (event) => { event.preventDefault(); invoke("start_object_resize", { label: "photo" }).catch(console.error); });
+}
+
+function bindObjectAppearance(id) {
+  return listen("object-appearance", ({ payload }) => {
+    const object = document.querySelector(`#${id}`);
+    if (!object) return;
+    object.style.transitionDuration = `${payload.durationMs}ms`;
+    object.style.opacity = String(payload.opacity);
+    object.dataset.interactionState = payload.state;
+  });
+}
+
 async function bootClockRuntime() {
   document.body.className = "clock-runtime";
   let settings = await invoke("get_settings");
@@ -310,13 +371,7 @@ async function bootClockRuntime() {
   draw();
   await listen("runtime-settings", ({ payload }) => { settings = payload; draw(); });
   await listen("edit-mode", ({ payload }) => document.body.classList.toggle("is-editing", payload));
-  await listen("clock-appearance", ({ payload }) => {
-    const object = document.querySelector("#clockObject");
-    if (!object) return;
-    object.style.transitionDuration = `${payload.durationMs}ms`;
-    object.style.opacity = String(payload.opacity);
-    object.dataset.interactionState = payload.state;
-  });
+  await bindObjectAppearance("clockObject");
   if (import.meta.env.DEV) await listen("debug-snapshot", ({ payload }) => {
     const output = document.querySelector("#debugReadout");
     if (output) output.textContent = `${payload.state} · cursor ${Math.round(payload.cursorX)},${Math.round(payload.cursorY)} · window ${payload.windowX},${payload.windowY} ${payload.width}×${payload.height} · inside ${payload.cursorInsideBounds} · click-through ${payload.ignoreCursorEvents} · ${payload.monitor || "monitor"} @${payload.scaleFactor}`;
@@ -324,13 +379,32 @@ async function bootClockRuntime() {
   clockLoop();
 }
 
+async function bootPhotoRuntime() {
+  document.body.className = "clock-runtime photo-runtime";
+  let settings = await invoke("get_photo_settings");
+  let data = await invoke("get_photo_data");
+  if (!settings || !data) return;
+  const draw = () => {
+    document.querySelector("#app").innerHTML = photoRuntimeMarkup(data);
+    bindPhotoControls(settings);
+  };
+  draw();
+  await listen("photo-settings", ({ payload }) => { settings = payload; draw(); });
+  await listen("photo-data", ({ payload }) => { data = payload; draw(); });
+  await listen("edit-mode", ({ payload }) => document.body.classList.toggle("is-editing", payload));
+  await bindObjectAppearance("photoObject");
+}
+
 async function bootStudioRuntime() {
   try { applyRuntimeSettings(await invoke("get_settings")); } catch (error) { console.error(error); }
+  try { state.photoObject = await invoke("get_photo_settings"); } catch (error) { console.error(error); }
   render();
   await listen("runtime-settings", ({ payload }) => { applyRuntimeSettings(payload); render(); });
+  await listen("photo-settings", ({ payload }) => { state.photoObject = payload; render(); });
 }
 
 if (clockWindow && nativeRuntime) bootClockRuntime().catch(console.error);
+else if (photoWindow && nativeRuntime) bootPhotoRuntime().catch(console.error);
 else {
   clockLoop();
   if (nativeRuntime) bootStudioRuntime().catch(console.error);

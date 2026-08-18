@@ -25,3 +25,4 @@ tauri = { version = "2.11.3", features = ["tray-icon", "unstable"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-runtime = "2.11.3"
+base64 = "0.22"

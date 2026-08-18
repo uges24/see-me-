@@ -1,13 +1,19 @@
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 pub const MIN_SIZE: u32 = 180;
 pub const MAX_SIZE: u32 = 720;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeSettings {
-    pub selected_face: String,
+pub struct DesktopObjectSettings {
+    #[serde(default = "default_clock_id")]
+    pub id: String,
+    #[serde(default)]
+    pub object_type: ObjectType,
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -24,16 +30,18 @@ pub struct RuntimeSettings {
     pub ghost_hide_delay: u64,
     pub ghost_return_delay: u64,
     pub fade_opacity: f64,
-    pub show_second_hand: bool,
-    pub smooth_movement: bool,
     pub visible: bool,
-    pub launch_at_login: bool,
 }
 
-impl Default for RuntimeSettings {
-    fn default() -> Self {
+fn default_clock_id() -> String {
+    "clock".into()
+}
+
+impl DesktopObjectSettings {
+    pub fn clock() -> Self {
         Self {
-            selected_face: "koi".into(),
+            id: default_clock_id(),
+            object_type: ObjectType::Clock,
             x: 80,
             y: 80,
             width: 360,
@@ -48,9 +56,76 @@ impl Default for RuntimeSettings {
             ghost_hide_delay: 0,
             ghost_return_delay: 150,
             fade_opacity: 0.15,
+            visible: true,
+        }
+    }
+
+    pub fn photo() -> Self {
+        Self {
+            id: "photo".into(),
+            object_type: ObjectType::Photo,
+            x: 480,
+            y: 80,
+            width: 420,
+            height: 315,
+            locked: false,
+            ..Self::clock()
+        }
+    }
+
+    pub fn validated(mut self) -> Self {
+        let defaults = match self.object_type {
+            ObjectType::Clock => Self::clock(),
+            ObjectType::Photo => Self::photo(),
+        };
+        self.width = self.width.clamp(MIN_SIZE, MAX_SIZE);
+        self.height = self.height.clamp(MIN_SIZE, MAX_SIZE);
+        self.fade_opacity = if self.fade_opacity.is_finite() {
+            self.fade_opacity.clamp(0.05, 0.5)
+        } else {
+            defaults.fade_opacity
+        };
+        self.scale_factor = valid_scale(self.scale_factor);
+        self.relative_x = self
+            .relative_x
+            .filter(|value| value.is_finite())
+            .map(|value| value.clamp(0.0, 1.0));
+        self.relative_y = self
+            .relative_y
+            .filter(|value| value.is_finite())
+            .map(|value| value.clamp(0.0, 1.0));
+        self.ghost_hide_delay = self.ghost_hide_delay.min(2_000);
+        self.ghost_return_delay = self.ghost_return_delay.min(2_000);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObjectType {
+    #[default]
+    Clock,
+    Photo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSettings {
+    pub selected_face: String,
+    #[serde(flatten)]
+    pub object: DesktopObjectSettings,
+    pub show_second_hand: bool,
+    pub smooth_movement: bool,
+    pub launch_at_login: bool,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            selected_face: "koi".into(),
+            object: DesktopObjectSettings::clock(),
             show_second_hand: true,
             smooth_movement: true,
-            visible: true,
             launch_at_login: false,
         }
     }
@@ -65,29 +140,84 @@ impl RuntimeSettings {
         ) {
             self.selected_face = defaults.selected_face;
         }
-        self.width = self.width.clamp(MIN_SIZE, MAX_SIZE);
-        self.height = self.width;
-        self.fade_opacity = if self.fade_opacity.is_finite() {
-            self.fade_opacity.clamp(0.05, 0.5)
-        } else {
-            defaults.fade_opacity
-        };
-        self.scale_factor = if self.scale_factor.is_finite() && self.scale_factor > 0.0 {
-            self.scale_factor
-        } else {
-            1.0
-        };
-        self.relative_x = self
-            .relative_x
-            .filter(|value| value.is_finite())
-            .map(|value| value.clamp(0.0, 1.0));
-        self.relative_y = self
-            .relative_y
-            .filter(|value| value.is_finite())
-            .map(|value| value.clamp(0.0, 1.0));
-        self.ghost_hide_delay = self.ghost_hide_delay.min(2_000);
-        self.ghost_return_delay = self.ghost_return_delay.min(2_000);
+        self.object = self.object.validated();
+        self.object.object_type = ObjectType::Clock;
+        self.object.id = default_clock_id();
+        self.object.height = self.object.width;
         self
+    }
+}
+
+impl Deref for RuntimeSettings {
+    type Target = DesktopObjectSettings;
+    fn deref(&self) -> &Self::Target {
+        &self.object
+    }
+}
+
+impl DerefMut for RuntimeSettings {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.object
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotoSettings {
+    #[serde(flatten)]
+    pub object: DesktopObjectSettings,
+    pub asset_path: String,
+    pub mime_type: String,
+    pub natural_width: u32,
+    pub natural_height: u32,
+}
+
+impl PhotoSettings {
+    pub fn new(
+        asset_path: String,
+        mime_type: String,
+        natural_width: u32,
+        natural_height: u32,
+    ) -> Self {
+        let aspect = natural_width.max(1) as f64 / natural_height.max(1) as f64;
+        let mut object = DesktopObjectSettings::photo();
+        object.height = (object.width as f64 / aspect).round() as u32;
+        Self {
+            object,
+            asset_path,
+            mime_type,
+            natural_width: natural_width.max(1),
+            natural_height: natural_height.max(1),
+        }
+        .validated()
+    }
+
+    pub fn validated(mut self) -> Self {
+        self.object = self.object.validated();
+        self.object.object_type = ObjectType::Photo;
+        self.object.id = "photo".into();
+        let aspect = self.aspect_ratio();
+        self.object.height = (self.object.width as f64 / aspect)
+            .round()
+            .clamp(MIN_SIZE as f64, MAX_SIZE as f64) as u32;
+        self
+    }
+
+    pub fn aspect_ratio(&self) -> f64 {
+        self.natural_width.max(1) as f64 / self.natural_height.max(1) as f64
+    }
+}
+
+impl Deref for PhotoSettings {
+    type Target = DesktopObjectSettings;
+    fn deref(&self) -> &Self::Target {
+        &self.object
+    }
+}
+
+impl DerefMut for PhotoSettings {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.object
     }
 }
 
@@ -195,7 +325,7 @@ fn best_display(bounds: Bounds, displays: &[DisplayArea]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-impl RuntimeSettings {
+impl DesktopObjectSettings {
     pub fn bounds(&self) -> Bounds {
         Bounds {
             x: self.x,
@@ -248,9 +378,13 @@ impl RuntimeSettings {
             .or(primary_index)
             .unwrap_or(0);
         let target = &displays[target_index];
-        let max_side = target.work_area.width.min(target.work_area.height).max(1);
-        self.width = self.width.min(max_side).clamp(1, MAX_SIZE);
-        self.height = self.width;
+        let max_width = target.work_area.width.clamp(1, MAX_SIZE);
+        let max_height = target.work_area.height.clamp(1, MAX_SIZE);
+        let fit = (max_width as f64 / self.width.max(1) as f64)
+            .min(max_height as f64 / self.height.max(1) as f64)
+            .min(1.0);
+        self.width = (self.width.max(1) as f64 * fit).round().max(1.0) as u32;
+        self.height = (self.height.max(1) as f64 * fit).round().max(1.0) as u32;
 
         if saved_index == Some(target_index) {
             if let Some(relative) = self.relative_x {
@@ -488,13 +622,11 @@ mod tests {
             display("primary", 0, 0, 1920, 1040, 1.0),
             display("upper-left", -1280, -1024, 1280, 984, 1.25),
         ];
-        let mut settings = RuntimeSettings {
-            x: -900,
-            y: -700,
-            width: 300,
-            height: 300,
-            ..RuntimeSettings::default()
-        };
+        let mut settings = RuntimeSettings::default();
+        settings.x = -900;
+        settings.y = -700;
+        settings.width = 300;
+        settings.height = 300;
 
         assert!(settings.capture_display_placement(&displays));
         assert_eq!(settings.monitor.as_deref(), Some("upper-left"));
@@ -515,16 +647,12 @@ mod tests {
 
     #[test]
     fn removed_monitor_recovers_to_primary_work_area() {
-        let mut settings = RuntimeSettings {
-            monitor: Some("removed".into()),
-            x: -1200,
-            y: 200,
-            width: 360,
-            height: 360,
-            relative_x: Some(0.8),
-            relative_y: Some(0.5),
-            ..RuntimeSettings::default()
-        };
+        let mut settings = RuntimeSettings::default();
+        settings.monitor = Some("removed".into());
+        settings.x = -1200;
+        settings.y = 200;
+        settings.relative_x = Some(0.8);
+        settings.relative_y = Some(0.5);
         let displays = [display("primary", 0, 0, 1920, 1040, 1.0)];
 
         assert!(settings.restore_display_placement(&displays, Some("primary")));
@@ -535,16 +663,12 @@ mod tests {
 
     #[test]
     fn resolution_reduction_preserves_relative_placement_and_aspect_ratio() {
-        let mut settings = RuntimeSettings {
-            monitor: Some("primary".into()),
-            x: 1560,
-            y: 680,
-            width: 360,
-            height: 360,
-            relative_x: Some(1.0),
-            relative_y: Some(1.0),
-            ..RuntimeSettings::default()
-        };
+        let mut settings = RuntimeSettings::default();
+        settings.monitor = Some("primary".into());
+        settings.x = 1560;
+        settings.y = 680;
+        settings.relative_x = Some(1.0);
+        settings.relative_y = Some(1.0);
         let displays = [display("primary", 0, 0, 1280, 680, 1.5)];
 
         settings.restore_display_placement(&displays, Some("primary"));
@@ -556,23 +680,15 @@ mod tests {
     #[test]
     fn partial_and_complete_offscreen_positions_recover_safely() {
         let displays = [display("primary", 0, 0, 1280, 680, 1.0)];
-        let mut partial = RuntimeSettings {
-            x: 1200,
-            y: 620,
-            width: 360,
-            height: 360,
-            ..RuntimeSettings::default()
-        };
+        let mut partial = RuntimeSettings::default();
+        partial.x = 1200;
+        partial.y = 620;
         partial.restore_display_placement(&displays, Some("primary"));
         assert_eq!((partial.x, partial.y), (920, 320));
 
-        let mut missing = RuntimeSettings {
-            x: 5000,
-            y: -5000,
-            width: 360,
-            height: 360,
-            ..RuntimeSettings::default()
-        };
+        let mut missing = RuntimeSettings::default();
+        missing.x = 5000;
+        missing.y = -5000;
         missing.restore_display_placement(&displays, Some("primary"));
         assert_eq!((missing.x, missing.y), (40, 40));
     }
@@ -646,19 +762,30 @@ mod tests {
 
     #[test]
     fn invalid_settings_recover_and_preserve_square_geometry() {
-        let invalid = RuntimeSettings {
-            selected_face: "missing".into(),
-            width: 4,
-            height: 9999,
-            fade_opacity: f64::NAN,
-            scale_factor: -1.0,
-            ..RuntimeSettings::default()
-        }
-        .validated();
+        let mut invalid = RuntimeSettings::default();
+        invalid.selected_face = "missing".into();
+        invalid.width = 4;
+        invalid.height = 9999;
+        invalid.fade_opacity = f64::NAN;
+        invalid.scale_factor = -1.0;
+        let invalid = invalid.validated();
         assert_eq!(invalid.selected_face, "koi");
         assert_eq!(invalid.width, MIN_SIZE);
         assert_eq!(invalid.height, MIN_SIZE);
         assert_eq!(invalid.fade_opacity, 0.15);
         assert_eq!(invalid.scale_factor, 1.0);
+    }
+
+    #[test]
+    fn photo_preserves_source_aspect_ratio() {
+        let mut photo = PhotoSettings::new("photo.webp".into(), "image/webp".into(), 1600, 900);
+        assert_eq!(photo.object_type, ObjectType::Photo);
+        assert_eq!(photo.width, 420);
+        assert_eq!(photo.height, 236);
+        assert!((photo.aspect_ratio() - 16.0 / 9.0).abs() < f64::EPSILON);
+        photo.width = 720;
+        photo.height = 405;
+        photo.restore_display_placement(&[display("small", 0, 0, 500, 300, 1.0)], Some("small"));
+        assert_eq!((photo.width, photo.height), (500, 281));
     }
 }

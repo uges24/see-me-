@@ -4,7 +4,8 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "clock"
+    "clock",
+    "photo"
   ],
   "permissions": [
     "core:default",
